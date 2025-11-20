@@ -413,8 +413,25 @@ window.leaveRoom = function() {
 // ============ FIREBASE INITIALIZATION ============
 async function initFirebase() {
     try {
-        window.appId = typeof __app_id !== 'undefined' ? __app_id : 'default-voice-chat-app-id';
-        const firebaseConfig = JSON.parse(typeof __firebase_config !== 'undefined' ? __firebase_config : '{}');
+        // Try to get config from global variables first, then use hardcoded config
+        let firebaseConfig = {};
+        
+        if (typeof __firebase_config !== 'undefined') {
+            firebaseConfig = JSON.parse(__firebase_config);
+        } else {
+            // Use the provided Firebase config
+            firebaseConfig = {
+                apiKey: "AIzaSyC2vPpRp_RDuIF8jXAiyAshsyAam6ZbeFs",
+                authDomain: "trixbox-voice-chat.firebaseapp.com",
+                projectId: "trixbox-voice-chat",
+                storageBucket: "trixbox-voice-chat.firebasestorage.app",
+                messagingSenderId: "476286352040",
+                appId: "1:476286352040:web:aa9b1eab74a6ec00c1609d",
+                measurementId: "G-Z2W6SH40CW"
+            };
+        }
+        
+        window.appId = typeof __app_id !== 'undefined' ? __app_id : firebaseConfig.projectId || 'default-voice-chat-app-id';
         const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
 
         if (!firebaseConfig.apiKey) {
@@ -435,20 +452,3 @@ async function initFirebase() {
 
         onAuthStateChanged(window.auth, async (user) => {
             if (user) {
-                window.userId = user.uid;
-                UI.userIdDisplay.textContent = window.userId;
-                await initializeRoom();
-            } else {
-                updateGlobalStatus('error', 'Authentication Failed');
-                showToast('Authentication failed', 'error');
-            }
-        });
-    } catch (e) {
-        console.error("Firebase Initialization Error:", e);
-        updateGlobalStatus('error', 'Init Error');
-        showToast('Initialization error: ' + (e.message || 'Check console'), 'error');
-    }
-}
-
-// Initialize on load
-window.addEventListener('load', initFirebase);
