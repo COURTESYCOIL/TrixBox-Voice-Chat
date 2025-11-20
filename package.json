@@ -1,0 +1,59 @@
+{
+  "name": "trixbox-voice-chat",
+  "version": "1.0.0",
+  "description": "A modern peer-to-peer Discord-like voice chat application with WebRTC and Firebase",
+  "main": "index.html",
+  "type": "module",
+  "scripts": {
+    "start": "python -m http.server 8000",
+    "dev": "python -m http.server 8000",
+    "build": "echo 'No build step required - static files only'",
+    "test": "echo 'Open index.html in browser to test'"
+  },
+  "keywords": [
+    "webrtc",
+    "voice-chat",
+    "p2p",
+    "firebase",
+    "discord",
+    "real-time",
+    "communication"
+  ],
+  "author": "TrixBox Team",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/yourusername/trixbox-voice-chat"
+  },
+  "bugs": {
+    "url": "https://github.com/yourusername/trixbox-voice-chat/issues"
+  },
+  "homepage": "https://github.com/yourusername/trixbox-voice-chat#readme",
+  "dependencies": {
+    "firebase": "^11.6.1"
+  },
+  "devDependencies": {},
+  "engines": {
+    "node": ">=14.0.0"
+  },
+  "browserslist": [
+    "last 2 Chrome versions",
+    "last 2 Firefox versions",
+    "last 2 Safari versions",
+    "last 2 Edge versions"
+  ],
+  "features": {
+    "webrtc": "Peer-to-peer audio streaming",
+    "firebase": "Firestore signaling and authentication",
+    "voiceActivity": "Real-time voice activity detection",
+    "multiUser": "Support for multiple simultaneous peers",
+    "embeddable": "Can be embedded as iframe",
+    "responsive": "Works on desktop and mobile"
+  },
+  "deployment": {
+    "netlify": "Supported",
+    "vercel": "Supported",
+    "selfHosted": "Supported (HTTPS required)",
+    "firebase": "Required for signaling"
+  }
+}
