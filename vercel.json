@@ -1,6 +1,6 @@
 {
   "buildCommand": "echo 'No build step required'",
-  "outputDirectory": "index.html",
+  "outputDirectory": "./",
   "framework": "static",
   "public": true,
   "env": {},
