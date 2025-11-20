@@ -1,0 +1,517 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebRTC Voice Chat Room</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f3f4f6;
+        }
+        .status-dot {
+            height: 12px;
+            width: 12px;
+            background-color: #d1d5db;
+            border-radius: 50%;
+            display: inline-block;
+            transition: background-color 0.3s;
+        }
+        .status-ready { background-color: #34d399; }
+        .status-connecting { background-color: #fcd34d; }
+        .status-connected { background-color: #10b981; }
+        .status-error { background-color: #ef4444; }
+    </style>
+</head>
+<body class="p-4 min-h-screen flex items-center justify-center">
+
+    <div id="app-container" class="bg-white p-6 md:p-10 rounded-xl shadow-2xl w-full max-w-lg transition-all">
+        <h1 class="text-3xl font-bold text-gray-800 mb-4 text-center">WebRTC Voice Chat</h1>
+        <p class="text-sm text-gray-500 mb-6 text-center">1-to-1 Peer Connection via Firestore Signaling</p>
+
+        <div class="space-y-4">
+            <!-- Auth and Status Indicators -->
+            <div class="flex flex-col space-y-2">
+                <div class="bg-gray-100 p-3 rounded-lg flex items-center justify-between shadow-inner">
+                    <span class="text-sm font-semibold text-gray-700">My User ID:</span>
+                    <code id="my-user-id" class="text-xs font-mono bg-white px-2 py-1 rounded-md text-blue-600 truncate">Initializing...</code>
+                </div>
+                
+                <div class="bg-gray-100 p-3 rounded-lg flex items-center justify-between shadow-inner">
+                    <span class="text-sm font-semibold text-gray-700">Connection Status:</span>
+                    <div class="flex items-center space-x-2">
+                        <span id="connection-status-dot" class="status-dot"></span>
+                        <span id="connection-status-text" class="text-sm font-medium text-gray-600">Loading Auth</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Peer ID Input -->
+            <div class="mt-6">
+                <label for="peer-id-input" class="block text-sm font-medium text-gray-700 mb-2">Peer's User ID (The person you want to talk to):</label>
+                <input type="text" id="peer-id-input" placeholder="Paste Peer ID here" 
+                       class="w-full p-3 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500 transition duration-150 text-sm">
+            </div>
+
+            <!-- Action Buttons -->
+            <div class="flex space-x-4 pt-4">
+                <button id="call-button" onclick="startCall()" disabled
+                    class="flex-1 bg-green-600 hover:bg-green-700 text-white font-semibold py-3 px-4 rounded-lg transition duration-300 ease-in-out disabled:opacity-50 disabled:cursor-not-allowed shadow-lg hover:shadow-xl">
+                    📞 Start Call / Connect
+                </button>
+                <button id="hangup-button" onclick="hangUp()" disabled
+                    class="flex-1 bg-red-500 hover:bg-red-600 text-white font-semibold py-3 px-4 rounded-lg transition duration-300 ease-in-out disabled:opacity-50 disabled:cursor-not-allowed shadow-lg hover:shadow-xl">
+                    Hang Up
+                </button>
+            </div>
+            <button id="mute-button" onclick="toggleMute()" disabled
+                class="w-full mt-2 bg-yellow-500 hover:bg-yellow-600 text-white font-semibold py-3 px-4 rounded-lg transition duration-300 ease-in-out disabled:opacity-50 disabled:cursor-not-allowed shadow-lg hover:shadow-xl">
+                🎙️ Mute Microphone
+            </button>
+        </div>
+
+        <!-- Hidden Audio Element -->
+        <audio id="remote-audio" autoplay class="hidden"></audio>
+
+        <!-- Message Box -->
+        <div id="message-box" class="mt-6 p-4 text-sm rounded-lg border border-yellow-300 bg-yellow-50 text-yellow-800 hidden"></div>
+    </div>
+
+    <!-- Firebase SDK Imports -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, setDoc, onSnapshot, getDoc, updateDoc, deleteDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // Global variables for access in the window scope
+        window.db = null;
+        window.auth = null;
+        window.userId = null;
+        window.appId = null;
+
+        // WebRTC variables
+        window.peerConnection = null;
+        window.localStream = null;
+        window.isMuted = false;
+
+        // Configuration
+        const configuration = {
+            iceServers: [
+                { urls: 'stun:stun.l.google.com:19302' },
+                // You can add more STUN or TURN servers here
+            ]
+        };
+
+        const elements = {
+            userIdDisplay: document.getElementById('my-user-id'),
+            peerIdInput: document.getElementById('peer-id-input'),
+            callButton: document.getElementById('call-button'),
+            hangupButton: document.getElementById('hangup-button'),
+            muteButton: document.getElementById('mute-button'),
+            remoteAudio: document.getElementById('remote-audio'),
+            statusDot: document.getElementById('connection-status-dot'),
+            statusText: document.getElementById('connection-status-text'),
+            messageBox: document.getElementById('message-box')
+        };
+
+        // --- Utility Functions ---
+
+        /** Displays a temporary message to the user. */
+        function displayMessage(message, isError = false) {
+            elements.messageBox.textContent = message;
+            elements.messageBox.className = `mt-6 p-4 text-sm rounded-lg border ${isError ? 'border-red-400 bg-red-100 text-red-800' : 'border-blue-400 bg-blue-100 text-blue-800'}`;
+            elements.messageBox.classList.remove('hidden');
+            setTimeout(() => {
+                elements.messageBox.classList.add('hidden');
+            }, 5000);
+        }
+
+        /** Updates the connection status indicator. */
+        function updateStatus(state, message) {
+            elements.statusDot.className = 'status-dot';
+            elements.statusText.textContent = message;
+            if (state === 'loading') {
+                elements.statusDot.classList.add('status-loading');
+            } else if (state === 'ready') {
+                elements.statusDot.classList.add('status-ready');
+                elements.callButton.disabled = false;
+            } else if (state === 'connecting') {
+                elements.statusDot.classList.add('status-connecting');
+            } else if (state === 'connected') {
+                elements.statusDot.classList.add('status-connected');
+            } else if (state === 'error') {
+                elements.statusDot.classList.add('status-error');
+            }
+        }
+
+        /** Gets the Firestore document path for a specific signal type between two peers. */
+        function getSignalDocRef(senderId, receiverId, type) {
+            const callId = [senderId, receiverId].sort().join('_'); // Consistent call ID
+            return doc(db, `artifacts/${appId}/public/data/calls/${callId}/${type}_${senderId}`);
+        }
+
+        // --- Firebase Initialization and Auth ---
+
+        async function initFirebase() {
+            try {
+                // Mandatory Global Variables
+                window.appId = typeof __app_id !== 'undefined' ? __app_id : 'default-voice-chat-app-id';
+                const firebaseConfig = JSON.parse(typeof __firebase_config !== 'undefined' ? __firebase_config : '{}');
+                const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+
+                if (!firebaseConfig.apiKey) {
+                    throw new Error("Firebase config not found. Cannot initialize application.");
+                }
+
+                setLogLevel('debug'); // Enable detailed Firestore logs
+                const app = initializeApp(firebaseConfig);
+                window.db = getFirestore(app);
+                window.auth = getAuth(app);
+
+                updateStatus('loading', 'Authenticating...');
+
+                // Sign-in
+                if (initialAuthToken) {
+                    await signInWithCustomToken(auth, initialAuthToken);
+                } else {
+                    await signInAnonymously(auth);
+                }
+
+                onAuthStateChanged(auth, (user) => {
+                    if (user) {
+                        window.userId = user.uid;
+                        elements.userIdDisplay.textContent = window.userId;
+                        updateStatus('ready', 'Ready to Call. Enter Peer ID.');
+                        elements.callButton.disabled = false;
+                        
+                        // Start listening for offers directed to me
+                        listenForSignals('offer'); 
+                        listenForSignals('answer'); 
+                        listenForSignals('candidate'); 
+
+                    } else {
+                        updateStatus('error', 'Authentication Failed.');
+                    }
+                });
+            } catch (e) {
+                console.error("Firebase Initialization Error:", e);
+                updateStatus('error', 'Init Error: ' + (e.message || 'Check console.'));
+            }
+        }
+        
+        // --- WebRTC Core Functions ---
+
+        async function getMedia() {
+            try {
+                localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+                displayMessage("Microphone access granted.");
+                return localStream;
+            } catch (e) {
+                console.error("Error accessing microphone:", e);
+                displayMessage("Error: Could not access microphone. Please ensure permissions are granted.", true);
+                throw e;
+            }
+        }
+
+        function createPeerConnection() {
+            peerConnection = new RTCPeerConnection(configuration);
+
+            // Add local audio tracks to the connection
+            localStream.getTracks().forEach(track => {
+                peerConnection.addTrack(track, localStream);
+            });
+
+            // Handle ICE candidates (network information)
+            peerConnection.onicecandidate = async (event) => {
+                if (event.candidate) {
+                    // Send candidate to the remote peer via Firestore
+                    await sendSignal(elements.peerIdInput.value, 'candidate', {
+                        candidate: event.candidate.toJSON()
+                    });
+                }
+            };
+
+            // Handle remote track/stream arrival
+            peerConnection.ontrack = (event) => {
+                if (event.streams && event.streams[0]) {
+                    elements.remoteAudio.srcObject = event.streams[0];
+                    elements.remoteAudio.play();
+                    console.log('Remote audio stream received and playing.');
+                }
+            };
+
+            // Handle connection state changes
+            peerConnection.onconnectionstatechange = () => {
+                console.log('RTCPeerConnection state:', peerConnection.connectionState);
+                if (peerConnection.connectionState === 'connected') {
+                    updateStatus('connected', 'Voice Connected!');
+                    elements.hangupButton.disabled = false;
+                    elements.muteButton.disabled = false;
+                } else if (peerConnection.connectionState === 'disconnected' || peerConnection.connectionState === 'failed') {
+                    hangUp();
+                    displayMessage('Connection dropped.', true);
+                }
+            };
+        }
+
+        // --- Signaling via Firestore ---
+
+        /**
+         * Sends a signaling message to the Firestore document dedicated to the receiver.
+         * @param {string} receiverId The ID of the peer to receive the signal.
+         * @param {string} type The signal type ('offer', 'answer', 'candidate').
+         * @param {object} payload The SDP or ICE candidate object.
+         */
+        async function sendSignal(receiverId, type, payload) {
+            const senderId = userId;
+            const docRef = getSignalDocRef(senderId, receiverId, type);
+            
+            await setDoc(docRef, {
+                type: type,
+                sender: senderId,
+                receiver: receiverId,
+                timestamp: Date.now(),
+                payload: JSON.stringify(payload)
+            }, { merge: true });
+            
+            console.log(`Signal '${type}' sent from ${senderId} to ${receiverId}.`);
+        }
+
+        /**
+         * Listens for incoming signaling messages of a specific type.
+         * @param {string} type The signal type to listen for ('offer', 'answer', 'candidate').
+         */
+        function listenForSignals(type) {
+            // The document reference is based on what the SENDER uses to address the RECEIVER.
+            // When listening, the current user is the RECEIVER.
+            const senderIdPlaceholder = elements.peerIdInput.value || 'temp_placeholder'; 
+            
+            // Note: This listen structure is imperfect for dynamic peer discovery,
+            // but necessary to keep the signaling documents unique and addressable.
+            // We listen on a general path and rely on the UI input/actions to focus the chat.
+
+            // To listen for offers/candidates, we listen on documents where WE are the receiver.
+            // To listen for answers, we listen on documents where WE are the original sender.
+            
+            // For a 1:1 implementation, it's easier if we only listen for 'offer' when idle,
+            // and only listen for 'answer' and 'candidate' after an offer is sent.
+            
+            // Let's create a main listener for offers and a dynamic listener for other messages.
+            
+            if (type === 'offer') {
+                const callIdPrefix = [senderIdPlaceholder, userId].sort().slice(0, 1).join('_');
+                const collectionPath = `artifacts/${appId}/public/data/calls/`;
+                const q = doc(db, collectionPath, `${callIdPrefix}_${userId}`); // This is complicated.
+
+                // Simplified: Listen for ANY document in a special 'inbox' collection.
+                const inboxRef = doc(db, `artifacts/${appId}/public/data/inbox`, userId);
+                
+                onSnapshot(inboxRef, async (docSnap) => {
+                    if (docSnap.exists() && docSnap.data().type === 'offer' && !peerConnection) {
+                        const signal = JSON.parse(docSnap.data().payload);
+                        const senderId = docSnap.data().sender;
+                        
+                        // We received an offer while idle - let's set ourselves up to answer.
+                        displayMessage(`Incoming call from ${senderId}! Connecting...`);
+                        elements.peerIdInput.value = senderId;
+                        
+                        await handleIncomingOffer(signal.sdp, senderId);
+                        // Clean up the offer
+                        deleteDoc(inboxRef);
+                    }
+                });
+                console.log(`Listening for offers in inbox/${userId}`);
+            }
+        }
+        
+        // --- Call Handlers ---
+        
+        /** Handles the process of receiving an SDP Offer and sending an Answer. */
+        async function handleIncomingOffer(offerSdp, senderId) {
+            try {
+                updateStatus('connecting', `Receiving call from ${senderId}...`);
+                await getMedia();
+                createPeerConnection();
+
+                const offer = new RTCSessionDescription({ type: 'offer', sdp: offerSdp });
+                await peerConnection.setRemoteDescription(offer);
+                
+                // Set up listener for ICE candidates from the sender
+                startListeningForIceCandidates(senderId, userId);
+                
+                const answer = await peerConnection.createAnswer();
+                await peerConnection.setLocalDescription(answer);
+
+                // Send the Answer back to the Caller
+                const answerDocRef = doc(db, `artifacts/${appId}/public/data/inbox`, senderId);
+                await setDoc(answerDocRef, {
+                    type: 'answer',
+                    sender: userId,
+                    receiver: senderId,
+                    timestamp: Date.now(),
+                    payload: JSON.stringify({ sdp: answer.sdp })
+                }, { merge: true });
+
+            } catch (e) {
+                console.error("Error handling incoming offer:", e);
+                displayMessage("Call failed: could not handle offer.", true);
+                hangUp();
+            }
+        }
+
+        /** Starts the call by creating an Offer and sending it via Firestore. */
+        window.startCall = async function() {
+            const peerId = elements.peerIdInput.value.trim();
+            if (!peerId || peerId === userId) {
+                displayMessage('Please enter a valid Peer ID to start a call.', true);
+                return;
+            }
+            updateStatus('connecting', `Calling ${peerId}...`);
+            elements.callButton.disabled = true;
+            elements.hangupButton.disabled = false;
+
+            try {
+                await getMedia();
+                createPeerConnection();
+
+                // 1. Create Offer
+                const offer = await peerConnection.createOffer();
+                await peerConnection.setLocalDescription(offer);
+
+                // 2. Send Offer to Peer's inbox
+                const inboxRef = doc(db, `artifacts/${appId}/public/data/inbox`, peerId);
+                await setDoc(inboxRef, {
+                    type: 'offer',
+                    sender: userId,
+                    receiver: peerId,
+                    timestamp: Date.now(),
+                    payload: JSON.stringify({ sdp: offer.sdp })
+                }, { merge: true });
+
+                displayMessage(`Offer sent to ${peerId}. Waiting for their response...`);
+                
+                // 3. Listen for Answer from the Peer
+                listenForAnswer(peerId);
+                
+                // 4. Start listening for ICE candidates from the Peer
+                startListeningForIceCandidates(peerId, userId);
+
+            } catch (e) {
+                console.error("Error starting call:", e);
+                displayMessage("Call failed: Could not start connection.", true);
+                hangUp();
+            }
+        };
+        
+        /** Listens specifically for the Answer from the Peer we called. */
+        function listenForAnswer(peerId) {
+            const inboxRef = doc(db, `artifacts/${appId}/public/data/inbox`, userId);
+
+            const unsubscribeAnswer = onSnapshot(inboxRef, async (docSnap) => {
+                if (docSnap.exists() && docSnap.data().type === 'answer') {
+                    const signal = JSON.parse(docSnap.data().payload);
+                    const answer = new RTCSessionDescription({ type: 'answer', sdp: signal.sdp });
+                    await peerConnection.setRemoteDescription(answer);
+                    displayMessage('Answer received. Connection establishing...');
+                    
+                    // Clean up the answer
+                    deleteDoc(inboxRef);
+                    
+                    unsubscribeAnswer(); // Stop listening for the answer once received
+                }
+            });
+        }
+        
+        /** Establishes a permanent listener for ICE candidates during a connection. */
+        function startListeningForIceCandidates(remoteId, localId) {
+            const candidatesRef = doc(db, `artifacts/${appId}/public/data/candidates`, remoteId);
+            
+            const unsubscribeCandidates = onSnapshot(candidatesRef, async (docSnap) => {
+                if (docSnap.exists() && docSnap.data().sender === remoteId) {
+                    const candidateData = JSON.parse(docSnap.data().payload);
+                    const candidate = new RTCIceCandidate(candidateData.candidate);
+                    try {
+                        await peerConnection.addIceCandidate(candidate);
+                        console.log('Added remote ICE candidate.');
+                        // Clean up the candidate right after use
+                        deleteDoc(candidatesRef);
+                    } catch (e) {
+                        console.error('Error adding received ICE candidate:', e);
+                    }
+                }
+            });
+            // Store the unsubscribe function to clean up later in hangUp()
+            window.unsubscribeCandidates = unsubscribeCandidates;
+        }
+        
+        // Peer B sends candidates to Peer A, and vice-versa.
+        peerConnection.onicecandidate = async (event) => {
+            if (event.candidate) {
+                const receiverId = elements.peerIdInput.value;
+                const candidatesRef = doc(db, `artifacts/${appId}/public/data/candidates`, receiverId);
+                
+                await setDoc(candidatesRef, {
+                    type: 'candidate',
+                    sender: userId,
+                    receiver: receiverId,
+                    timestamp: Date.now(),
+                    payload: JSON.stringify({ candidate: event.candidate.toJSON() })
+                }, { merge: true });
+            }
+        };
+
+        /** Closes the connection and cleans up resources. */
+        window.hangUp = function() {
+            if (peerConnection) {
+                peerConnection.close();
+                peerConnection = null;
+            }
+            if (localStream) {
+                localStream.getTracks().forEach(track => track.stop());
+                localStream = null;
+            }
+            elements.remoteAudio.srcObject = null;
+            elements.callButton.disabled = false;
+            elements.hangupButton.disabled = true;
+            elements.muteButton.disabled = true;
+            window.isMuted = false;
+            elements.muteButton.textContent = '🎙️ Mute Microphone';
+            updateStatus('ready', 'Call Ended. Ready to Call.');
+            
+            // Clean up Firestore Listeners if they were active
+            if (window.unsubscribeCandidates) {
+                window.unsubscribeCandidates();
+                window.unsubscribeCandidates = null;
+            }
+        };
+        
+        /** Toggles the local microphone mute state. */
+        window.toggleMute = function() {
+            if (!localStream) return;
+            
+            window.isMuted = !window.isMuted;
+            localStream.getAudioTracks().forEach(track => {
+                track.enabled = !window.isMuted;
+            });
+
+            if (window.isMuted) {
+                elements.muteButton.textContent = '🔊 Unmute Microphone';
+                elements.muteButton.classList.remove('bg-yellow-500');
+                elements.muteButton.classList.add('bg-gray-500');
+                displayMessage('Microphone muted.');
+            } else {
+                elements.muteButton.textContent = '🎙️ Mute Microphone';
+                elements.muteButton.classList.remove('bg-gray-500');
+                elements.muteButton.classList.add('bg-yellow-500');
+                displayMessage('Microphone unmuted.');
+            }
+        };
+
+        // Initialize everything on window load
+        window.onload = initFirebase;
+    </script>
+</body>
+</html>
