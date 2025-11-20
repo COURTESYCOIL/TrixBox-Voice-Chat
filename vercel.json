@@ -1,11 +1,9 @@
 {
+  "$schema": "https://openapi.vercel.sh/vercel.json",
   "buildCommand": "echo 'No build step required'",
   "outputDirectory": "./",
-  "framework": "static",
   "public": true,
-  "env": {},
   "regions": ["iad1"],
-  "functions": {},
   "rewrites": [
     {
       "source": "/(.*)",
