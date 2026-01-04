@@ -1,3 +1,5 @@
+# You have been compromised! You can't just put your gh pat token out in the internet! Add jarivivi on discord for help fixing.
+
 # TrixBox Voice Chat - P2P Discord-like Voice Room
 
 A modern, fully peer-to-peer voice chat application with a Discord-inspired UI. Perfect for embedding in websites, web apps, or running standalone.
